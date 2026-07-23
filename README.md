@@ -1,26 +1,21 @@
 ![airllm_logo](https://github.com/lyogavin/airllm/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
-## Local fork notes
+## Local fork status
 
-This branch keeps the upstream AirLLM package, but adds portable smoke-test
-scripts for CPU, CUDA, Intel XPU, Apple MPS, and Windows DirectML runtimes.
-The scripts no longer assume an Intel Arc A770, `torch_directml`, or a Windows
-`D:\...` model path.
+This branch keeps the upstream AirLLM package and adds portable smoke-test scripts for
+CPU, CUDA, Intel XPU, Apple MPS, and Windows DirectML. Two different hardware profiles
+were validated on 2026-07-23; their environments and conclusions must not be mixed.
 
-Validated locally on 2026-07-23:
+### Portable CPU profile
 
-* Python environment: local `.venv` with Python 3.12.
-* PyTorch: `2.13.0+cpu`.
-* Transformers: `5.12.1`.
-* Tested machine: Intel Core i5-8250U with Intel UHD Graphics 620.
-* GPU result on that machine: `torch.cuda.is_available() == False` and
-  `torch.xpu.is_available() == False`.
-* Decision for that machine: use AirLLM on CPU only. The Intel UHD Graphics 620
-  is not exposed as a usable PyTorch XPU device in this environment.
+- Python 3.12 local `.venv`.
+- PyTorch `2.13.0+cpu` and Transformers `5.12.1`.
+- Intel Core i5-8250U with Intel UHD Graphics 620.
+- CUDA and PyTorch XPU unavailable; AirLLM runs on CPU only on this machine.
+- Result: technically functional, but not practical for interactive chat. See
+  [CPU benchmarks](BENCHMARKS.md).
 
-### Local CPU setup
-
-Use a local virtual environment. Do not install into the system Python.
+Use a local environment rather than the system Python:
 
 ```bash
 python3.12 -m venv .venv
@@ -29,39 +24,81 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install -e ./air_llm
 ```
 
-Run the smoke tests:
+### Intel Arc DirectML profile
+
+> [!IMPORTANT]
+> The DirectML experiment is technically successful, but large-model interactive
+> generation is **not usable at the measured speed**. See the
+> [DirectML experiment report](DIRECTML_EXPERIMENT.md).
+
+This fork adds a device abstraction for `torch-directml`, local checkpoint handling,
+device-aware memory cleanup, and early rejection of CUDA-only compression. The exact
+validated Arc A770 16 GB stack is:
+
+| Component | Validated value |
+|---|---|
+| PyTorch | `2.4.1+cpu` |
+| torch-directml | `0.2.5.dev240914` |
+| Transformers | `5.12.1` |
+| Device | `privateuseone:0` |
+| Dtype | `torch.float32` |
+
+Do not upgrade PyTorch independently: the available `torch-directml` build is tied to
+PyTorch 2.4.1. FP16/BF16 execution and `bitsandbytes` compression are not validated on
+this backend.
+
+| Checkpoint | Result | Evidence / limitation |
+|---|---|---|
+| TinyLlama 1.1B | PASS | Forward pass and `generate()` on DirectML |
+| Qwen2.5-1.5B-Instruct | PASS | Correct Paris answer; 30 split artifacts |
+| `allura-forge/Llama-3.3-8B-Instruct` | PASS, not usable | Four tokens in 181.86 s (`0.022` token/s) |
+| Qwen2.5-VL-3B | UNSUPPORTED | Vision-language architecture is outside the causal-LM runner |
+| Qwen3.5-4B | UNSUPPORTED by current splitter | Nested vision/MTP paths break the layer-name parser |
+
+The Llama test used revision
+`df95224cf87c32d9f4958dd284a07ded620aa4fc`, split 35/35 artifacts, loaded in
+245.52 seconds, and generated:
+
+```text
+The capital of France is Paris, and it
+```
+
+AirLLM loads model layers sequentially for every generated token. With DirectML FP32,
+the 16 GB BF16 checkpoint becomes approximately 32 GB of runtime weight traffic per
+token. Disk/RAM/PCIe transfers dominate GPU compute. For an 8B model on Arc, prefer
+`llama.cpp` with SYCL and a GGUF quantization that remains resident in VRAM.
+
+Install the fork and pinned DirectML backend, then provide a local Hugging Face causal
+checkpoint:
 
 ```bash
-.venv/bin/python test_arc.py --device cpu \
-  --model hf-internal-testing/tiny-random-LlamaForCausalLM \
-  --layer-shards-saving-path /tmp/airllm-smoke-shards
+python -m pip install -e ./air_llm
+python -m pip install "torch==2.4.1" "torch-directml==0.2.5.dev240914" "transformers==5.12.1"
+```
 
-.venv/bin/python test_v3_arc.py --device cpu \
-  --model hf-internal-testing/tiny-random-LlamaForCausalLM \
-  --max-new-tokens 3 \
-  --layer-shards-saving-path /tmp/airllm-smoke-shards
+```python
+import torch
+from airllm import AutoModel
 
-.venv/bin/python test_arc_gen.py --device cpu \
-  --model hf-internal-testing/tiny-random-LlamaForCausalLM \
-  --max-new-tokens 3 \
-  --layer-shards-saving-path /tmp/airllm-smoke-shards
+model = AutoModel.from_pretrained(
+    r"D:\models\your-causal-lm",
+    device="privateuseone:0",
+    dtype=torch.float32,
+)
 ```
 
 ### Portable runtime scripts
 
-The local scripts accept the same core options:
+The portable scripts accept `--model`, `--device`, `--dtype`,
+`--layer-shards-saving-path`, and `--hf-token`. Device values are `auto`, `cpu`,
+`cuda[:N]`, `xpu[:N]`, `mps`, `directml` / `dml[:N]`, and `privateuseone[:N]`.
+`--device auto` prefers CUDA, XPU, MPS, and DirectML in that order, then falls back to
+CPU. See `AGENTS.md` for the complete script and validation contract.
 
-* `--model`: Hugging Face repo id or local model path.
-* `--device`: `auto`, `cpu`, `cuda[:N]`, `xpu[:N]`, `mps`, `directml/dml[:N]`,
-  or `privateuseone[:N]`.
-* `--dtype`: `auto`, `float32`, `float16`, or `bfloat16`.
-* `--layer-shards-saving-path`: optional AirLLM split-shard cache directory.
-* `--hf-token`: optional Hugging Face token.
-
-`--device auto` prefers CUDA, then Intel XPU, then Apple MPS, then DirectML, and
-falls back to CPU.
-
-For benchmark results from this machine, see [BENCHMARKS.md](BENCHMARKS.md).
+No checkpoints are included. All downloaded models and generated `splitted_model`
+directories used for the Arc experiment were removed after validation. Model-dependent
+smoke tests are never zero-download CI tests unless they use an explicitly authorized
+tiny fixture.
 
 [**Quickstart**](#quickstart) | 
 [**Configurations**](#configurations) | 
@@ -69,7 +106,9 @@ For benchmark results from this machine, see [BENCHMARKS.md](BENCHMARKS.md).
 [**Example notebooks**](#example-python-notebook) | 
 [**FAQ**](#faq)
 
-**AirLLM** dramatically reduces inference memory usage, letting 70B large language models run on a single 4GB GPU card — without quantization, distillation, or pruning. You can even run **405B Llama 3.1** on **8GB**, and **DeepSeek-V3 (671B)** on **~12GB**.
+Upstream **AirLLM** dramatically reduces inference memory usage by streaming one layer
+at a time. The large-model capacity claims below are upstream claims and must not be
+interpreted as validated DirectML performance claims for this fork.
 
 <a href="https://github.com/lyogavin/airllm/stargazers">![GitHub Repo stars](https://img.shields.io/github/stars/lyogavin/airllm?style=social)</a>
 [![Downloads](https://static.pepy.tech/personalized-badge/airllm?period=total&units=international_system&left_color=grey&right_color=blue&left_text=downloads)](https://pepy.tech/project/airllm)
@@ -142,6 +181,9 @@ For benchmark results from this machine, see [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Quickstart
 
+> The examples in the upstream section below use CUDA (`.cuda()`). For Intel Arc,
+> use the DirectML quickstart above and move tensors to `privateuseone:0` instead.
+
 ### 1. Install package
 
 First, install the airllm pip package.
@@ -199,6 +241,10 @@ Note: During inference, the original model will first be decomposed and saved la
  
 
 ## Model Compression - 3x Inference Speed Up!
+
+> DirectML note: this feature depends on CUDA-oriented `bitsandbytes`. This fork rejects
+> `compression='4bit'` and `compression='8bit'` on `privateuseone` rather than failing
+> later. The instructions in this section apply to supported upstream CUDA environments.
 
 We just added model compression based on block-wise quantization-based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
@@ -331,7 +377,13 @@ model.tokenizer.decode(generation_output.sequences[0])
 
 ## Supported Models
 
-AirLLM works out of the box with **virtually every popular open LLM** — just pass its Hugging Face ID to `AutoModel.from_pretrained(...)`. That covers all the major families:
+The following is the broad upstream support statement. DirectML support is narrower and
+architecture-dependent; use the validated matrix near the top of this README as the
+source of truth for this fork. In particular, do not assume that VLMs or Qwen3.5 work
+through the generic causal-LM splitter.
+
+Upstream AirLLM works with many popular open LLMs by passing a Hugging Face ID to
+`AutoModel.from_pretrained(...)`. Major families include:
 
 **Llama** (2 / 3 / 3.1 / 3.3 / 4) · **Qwen** (1 / 2 / 2.5 / 3, including MoE and FP8) · **DeepSeek** (V2 / V3 / R1) · **Mistral & Mixtral** · **Phi** · **Gemma** · **ChatGLM** · **Baichuan** · **InternLM** · **Yi** — and most new models the day they're released.
 

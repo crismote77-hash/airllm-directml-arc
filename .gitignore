@@ -11,3 +11,7 @@ __pycache__
 # Package README is generated from the top-level README.md at build time
 air_llm/README.md
 models/
+workspace/
+*.safetensors
+*.gguf
+pytorch_model*.bin
