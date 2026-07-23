@@ -1,74 +1,84 @@
-"""Test AirLLM with Intel Arc A770 - full text generation"""
-import torch
-import torch_directml
-from airllm import AutoModel
+"""System-agnostic AirLLM manual text-generation smoke test."""
 
-dml = torch_directml.device()
-print(f"DirectML device: {dml}")
+from __future__ import annotations
 
-MODEL = r"D:\AI Projects\airllm\models\tinyllama"
-print(f"Loading {MODEL}...")
+import argparse
 
-model = AutoModel.from_pretrained(
-    MODEL,
-    device="privateuseone:0",
-    dtype=torch.float32,
+from runtime_utils import (
+    add_common_args,
+    import_torch,
+    load_model,
+    logits_from_output,
+    resolve_device,
 )
-tokenizer = model.tokenizer
-print(f"Model loaded! Config: {model.config._name_or_path}")
 
-# Text generation helper
-def generate_text(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7):
-    """Generate text one token at a time using the forward pass."""
-    input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'][0].tolist()
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser, default_prompt="What is the capital of France?")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature. Use 0 for greedy decoding.",
+    )
+    return parser
+
+
+def generate_text(model, tokenizer, torch, runtime, prompt: str, max_new_tokens: int, temperature: float) -> str:
+    input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
+    generated: list[int] = []
+
     print(f"Input: {prompt}")
     print(f"Initial tokens: {len(input_ids)}")
-    
-    generated = []
-    
+
     for step in range(max_new_tokens):
-        seq = torch.tensor([input_ids + generated], dtype=torch.long).to(dml)
-        
-        output = model(seq)
-        logits = output.logits if hasattr(output, 'logits') else output[0]
-        
-        # Last token's logits
+        seq = torch.tensor([input_ids + generated], dtype=torch.long).to(runtime.tensor_device)
+
+        with torch.no_grad():
+            output = model(seq)
+        logits = logits_from_output(output)
         next_token_logits = logits[0, -1]
-        
-        # Apply temperature
+
         if temperature > 0:
             next_token_logits = next_token_logits / temperature
             probs = torch.softmax(next_token_logits, dim=-1)
             next_token = torch.multinomial(probs, 1).item()
         else:
             next_token = torch.argmax(next_token_logits).item()
-        
+
         generated.append(next_token)
         token_str = tokenizer.decode([next_token])
-        
-        # Check for EOS
+        print(f"  step {step + 1}: token={next_token} {token_str!r}")
+
         if next_token == tokenizer.eos_token_id:
-            print(f"\n[EOS at step {step + 1}]")
+            print(f"[EOS at step {step + 1}]")
             break
-        
-        # Print progress periodically
-        if step % 5 == 0 or step < 3:
-            print(f"  step {step + 1}: token={next_token} '{token_str}'")
-    
-    full_output = tokenizer.decode(input_ids + generated)
-    return full_output
 
-# Test prompts
-prompts = [
-    "What is the capital of France?",
-    "The color of the sky is",
-    "1 + 1 =",
-]
+    return tokenizer.decode(input_ids + generated)
 
-for prompt in prompts:
-    print(f"\n{'=' * 50}")
-    result = generate_text(model, tokenizer, prompt, max_new_tokens=20, temperature=0.7)
-    print(f"\nResult: {result}")
 
-print(f"\n{'=' * 50}")
-print("SUCCESS: Text generation on Intel Arc A770 works!")
+def main() -> None:
+    args = build_parser().parse_args()
+    torch = import_torch()
+    runtime = resolve_device(torch, args.device)
+
+    model = load_model(args, runtime, torch)
+    tokenizer = model.tokenizer
+    print(f"Loaded config: {model.config._name_or_path}")
+
+    result = generate_text(
+        model,
+        tokenizer,
+        torch,
+        runtime,
+        args.prompt,
+        args.max_new_tokens,
+        args.temperature,
+    )
+    print(f"Result: {result}")
+    print("SUCCESS: AirLLM manual generation completed.")
+
+
+if __name__ == "__main__":
+    main()

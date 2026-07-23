@@ -1,5 +1,68 @@
 ![airllm_logo](https://github.com/lyogavin/airllm/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
+## Local fork notes
+
+This branch keeps the upstream AirLLM package, but adds portable smoke-test
+scripts for CPU, CUDA, Intel XPU, Apple MPS, and Windows DirectML runtimes.
+The scripts no longer assume an Intel Arc A770, `torch_directml`, or a Windows
+`D:\...` model path.
+
+Validated locally on 2026-07-23:
+
+* Python environment: local `.venv` with Python 3.12.
+* PyTorch: `2.13.0+cpu`.
+* Transformers: `5.12.1`.
+* Tested machine: Intel Core i5-8250U with Intel UHD Graphics 620.
+* GPU result on that machine: `torch.cuda.is_available() == False` and
+  `torch.xpu.is_available() == False`.
+* Decision for that machine: use AirLLM on CPU only. The Intel UHD Graphics 620
+  is not exposed as a usable PyTorch XPU device in this environment.
+
+### Local CPU setup
+
+Use a local virtual environment. Do not install into the system Python.
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4"
+.venv/bin/python -m pip install -e ./air_llm
+```
+
+Run the smoke tests:
+
+```bash
+.venv/bin/python test_arc.py --device cpu \
+  --model hf-internal-testing/tiny-random-LlamaForCausalLM \
+  --layer-shards-saving-path /tmp/airllm-smoke-shards
+
+.venv/bin/python test_v3_arc.py --device cpu \
+  --model hf-internal-testing/tiny-random-LlamaForCausalLM \
+  --max-new-tokens 3 \
+  --layer-shards-saving-path /tmp/airllm-smoke-shards
+
+.venv/bin/python test_arc_gen.py --device cpu \
+  --model hf-internal-testing/tiny-random-LlamaForCausalLM \
+  --max-new-tokens 3 \
+  --layer-shards-saving-path /tmp/airllm-smoke-shards
+```
+
+### Portable runtime scripts
+
+The local scripts accept the same core options:
+
+* `--model`: Hugging Face repo id or local model path.
+* `--device`: `auto`, `cpu`, `cuda[:N]`, `xpu[:N]`, `mps`, `directml/dml[:N]`,
+  or `privateuseone[:N]`.
+* `--dtype`: `auto`, `float32`, `float16`, or `bfloat16`.
+* `--layer-shards-saving-path`: optional AirLLM split-shard cache directory.
+* `--hf-token`: optional Hugging Face token.
+
+`--device auto` prefers CUDA, then Intel XPU, then Apple MPS, then DirectML, and
+falls back to CPU.
+
+For benchmark results from this machine, see [BENCHMARKS.md](BENCHMARKS.md).
+
 [**Quickstart**](#quickstart) | 
 [**Configurations**](#configurations) | 
 [**MacOS**](#macos) | 
@@ -120,7 +183,7 @@ input_tokens = model.tokenizer(input_text,
     padding=False)
            
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device),
     max_new_tokens=20,
     use_cache=True,
     return_dict_in_generate=True)
@@ -208,7 +271,7 @@ input_tokens = model.tokenizer(input_text,
     max_length=MAX_LENGTH, 
     padding=True)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device),
     max_new_tokens=5,
     use_cache= True,
     return_dict_in_generate=True)
@@ -228,7 +291,7 @@ input_tokens = model.tokenizer(input_text,
     truncation=True, 
     max_length=MAX_LENGTH)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device),
     max_new_tokens=5,
     use_cache=True,
     return_dict_in_generate=True)
@@ -251,7 +314,7 @@ input_tokens = model.tokenizer(input_text,
     truncation=True, 
     max_length=MAX_LENGTH)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device),
     max_new_tokens=5,
     use_cache=True,
     return_dict_in_generate=True)

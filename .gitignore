@@ -1,10 +1,13 @@
 .idea
 .ipynb_checkpoints
 .DS_Store
+.venv/
 airllm.egg-info
+*.egg-info/
 build
 dist
 __pycache__
+*.pyc
 # Package README is generated from the top-level README.md at build time
 air_llm/README.md
 models/

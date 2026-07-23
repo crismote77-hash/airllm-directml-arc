@@ -1,52 +1,52 @@
-"""Test AirLLM with Intel Arc A770 via DirectML - forward pass only"""
-import torch
-import torch_directml
-from airllm import AutoModel
+"""System-agnostic AirLLM forward-pass smoke test."""
 
-dml = torch_directml.device()
-print(f"DirectML device: {dml}")
+from __future__ import annotations
 
-# Load TinyLlama via AirLLM
-MODEL = r"D:\AI Projects\airllm\models\tinyllama"
-print(f"Loading {MODEL}...")
+import argparse
 
-model = AutoModel.from_pretrained(
-    MODEL,
-    device="privateuseone:0",
-    dtype=torch.float32,
+from runtime_utils import (
+    add_common_args,
+    import_torch,
+    load_model,
+    logits_from_output,
+    move_input_ids,
+    resolve_device,
+    tokenize,
 )
 
-print(f"Model loaded! Config: {model.config._name_or_path}")
 
-# Simple forward pass
-tokenizer = model.tokenizer
-input_text = "What is the capital of France?"
-print(f"\nPrompt: {input_text}")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser, default_prompt="What is the capital of France?")
+    return parser
 
-input_tokens = tokenizer(
-    input_text,
-    return_tensors="pt",
-    return_attention_mask=False,
-    truncation=True,
-    max_length=128,
-    padding=False,
-)
 
-print(f"Input tokens shape: {input_tokens['input_ids'].shape}")
-print("Running forward pass on Intel Arc A770...")
+def main() -> None:
+    args = build_parser().parse_args()
+    torch = import_torch()
+    runtime = resolve_device(torch, args.device)
 
-output = model(input_tokens['input_ids'].to(dml))
+    model = load_model(args, runtime, torch)
+    tokenizer = model.tokenizer
 
-if hasattr(output, 'logits'):
-    logits = output.logits
-else:
-    logits = output[0]  # tuple format
+    print(f"Loaded config: {model.config._name_or_path}")
+    print(f"Prompt: {args.prompt}")
 
-print(f"Output logits shape: {logits.shape}")
-print(f"Output device: {logits.device}")
+    input_tokens = tokenize(tokenizer, args.prompt, args.max_length)
+    input_ids = move_input_ids(input_tokens["input_ids"], runtime)
+    print(f"Input tokens shape: {tuple(input_ids.shape)}")
 
-# Decode top prediction
-top_token = logits[0, -1].argmax().item()
-print(f"Top next token: {top_token} -> '{tokenizer.decode([top_token])}'")
+    with torch.no_grad():
+        output = model(input_ids)
 
-print("\nSUCCESS: AirLLM forward pass on Intel Arc A770 works!")
+    logits = logits_from_output(output)
+    top_token = logits[0, -1].argmax().item()
+
+    print(f"Output logits shape: {tuple(logits.shape)}")
+    print(f"Output device: {logits.device}")
+    print(f"Top next token: {top_token} -> {tokenizer.decode([top_token])!r}")
+    print("SUCCESS: AirLLM forward pass completed.")
+
+
+if __name__ == "__main__":
+    main()
