@@ -1,0 +1,69 @@
+## CODE REVIEW: AirLLM DirectML patchset for Intel Arc GPU
+
+Review the complete patchset applied on AirLLM v3.0.1 (lyogavin/airllm main). 
+Goal: add Intel Arc GPU support via torch-directml while preserving AirLLM's layer-by-layer streaming superpower.
+
+### SCOPE
+4 files, +148/-9 lines. All changes are minimal, backward-compatible with CUDA path.
+
+### FILES CHANGED
+
+**1. air_llm/airllm/device_utils.py** (NEW, 122 lines)
+Device abstraction module with:
+- get_device_type(device) -> normalizes "cuda"|"directml"|"mps"|"cpu"
+- is_cuda_device / is_directml_device / can_pin_memory / supports_bitsandbytes
+- empty_cache(device) — device-agnostic cache clearing (CUDA + MPS + DirectML passthrough)
+- get_free_memory_bytes(device) — returns -1 for non-CUDA
+- is_directml_available / get_directml_device
+- Guarded torch.mps access (hasattr(torch, "mps") && hasattr(torch.mps, "empty_cache"))
+
+**2. air_llm/airllm/utils.py** (+19/-8 lines)
+- clean_memory(): now uses device_utils.empty_cache() for CUDA and MPS, with double-hasattr guard
+- find_or_create_local_splitted_path(): added isdir() guard + single-file model detection (model.safetensors / pytorch_model.bin without index.json)
+
+**3. air_llm/airllm/airllm_base.py** (+2/-1 lines)
+- Import can_pin_memory from device_utils
+- Line 272: replaced torch.cuda.is_available() with can_pin_memory(self.running_device)
+
+**4. air_llm/setup.py** (+4 lines)
+- extras_require: {'compression': ['bitsandbytes'], 'directml': ['torch-directml']}
+
+### DEPENDENCIES
+- torch-directml 0.2.5 (optional, via pip install airllm[directml])
+- No new hard dependencies. CUDA path unchanged.
+
+### INTER-FILE DEPENDENCIES
+- device_utils.py imported by utils.py (empty_cache) and airllm_base.py (can_pin_memory)
+- Both imports are relative (from .device_utils import ...)
+
+### VERIFICATION EVIDENCE
+- TinyLlama-1.1B forward pass: PASS on Intel Arc A770 (privateuseone:0)
+- TinyLlama-1.1B generate(): PASS (output: "The capital of France is Paris.")
+- Speed: ~8.3 layers/second
+- can_pin_memory(cuda:0)=True, can_pin_memory(privateuseone:0)=False
+- supports_bitsandbytes(privateuseone:0)=False
+- get_device_type(privateuseone:0)=directml
+
+### PRIOR PEER REVIEW FINDINGS (already addressed)
+- device_utils.py was dead code -> wired into airllm_base.py + utils.py
+- torch.mps crash in empty_cache -> added hasattr(torch, "mps") guard
+
+### KEY QUESTIONS
+1. Are there any remaining bugs, edge cases, or correctness issues?
+2. Is the dependency graph (device_utils -> utils, device_utils -> airllm_base) correct and minimal?
+3. Any security concerns (DirectML surface, path traversal in local-path detection)?
+4. What material improvements remain before this is merge-ready?
+
+### REQUIRED OUTPUT FORMAT
+Return a JSON object with:
+{
+  "agent_id": "YOUR_PEER_ID",
+  "candidate_version": "directml-arc-v2",
+  "verdict": "APPROVE|APPROVE_WITH_NOTES|BLOCK",
+  "material_improvements": ["list of remaining material gaps, empty if none"],
+  "no_material_improvements_found": true|false,
+  "code_quality_issues": ["bugs, edge cases, style issues"],
+  "dependency_analysis": "assessment of the import graph correctness",
+  "security_concerns": ["any security issues, empty if none"],
+  "recommendation": "final recommendation"
+}

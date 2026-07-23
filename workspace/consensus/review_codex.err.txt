@@ -1,0 +1,12 @@
+2026-07-23T13:23:23.495898Z ERROR codex_core::tools::router: error=`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'air_llm\\airllm\\utils.py'; "'$lines=Get-Content $p; for($i=60;$i -le 130;$i++){ if($i -le $lines.Length){ '"'{0,4}: {1}' -f "'$i,$lines[$i-1] }}; for($i=350;$i -le 440;$i++){ if($i -le $lines.Length){ '"'{0,4}: {1}' -f "'$i,$lines[$i-1] }}'` rejected: blocked by policy
+2026-07-23T13:23:23.516581Z ERROR codex_core::tools::router: error=`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'air_llm\\airllm\\airllm_base.py'; "'$lines=Get-Content $p; for($i=1;$i -le 120;$i++){ if($i -le $lines.Length){ '"'{0,4}: {1}' -f "'$i,$lines[$i-1] }}; for($i=250;$i -le 325;$i++){ if($i -le $lines.Length){ '"'{0,4}: {1}' -f "'$i,$lines[$i-1] }}'` rejected: blocked by policy
+2026-07-23T13:23:49.889339Z ERROR codex_core::tools::router: error=`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "python - <<'PY'
+import torch
+for s in ['cuda:0','cpu','mps','privateuseone:0','directml:0','dml:0']:
+    try:
+        print(s, '->', torch.device(s))
+    except Exception as e:
+        print(s, 'ERR', type(e).__name__, str(e))
+PY"` rejected: blocked by policy
+2026-07-23T13:23:55.830767Z ERROR codex_core::tools::router: error=`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "python -c \"import torch; [print(s, '->', torch.device(s)) if True else None for s in ['cuda:0','cpu','mps','privateuseone:0']]\""` rejected: blocked by policy
+2026-07-23T13:24:05.711824Z ERROR codex_core::tools::router: error=`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'python --version'` rejected: blocked by policy
